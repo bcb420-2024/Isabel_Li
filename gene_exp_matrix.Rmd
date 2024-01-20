@@ -1,0 +1,31 @@
+```{r}
+#create an empty matrix to store values in
+gene_exp = matrix(nrow = 5, ncol = 10)
+cond = paste('cond', 1:5, sep = '')
+ctrl = paste('ctrl', 1:5, sep = '')
+colnames(gene_exp) = c(cond, ctrl)
+rownames(gene_exp) = paste('gene', 1:5, sep = '')
+```
+
+```{r}
+#generate random integers in matrix
+for (i in 1:nrow(gene_exp)){
+  for (j in 1:ncol(gene_exp)){
+    gene_exp[i,j] = sample(1:1000, 1)
+  }
+}
+```
+```{r}
+fold_change = c()
+for (i in 1:nrow(gene_exp)){
+  mu_cond = mean(gene_exp[i, 1:5])
+  mu_ctrl = mean(gene_exp[i, 6:10])
+  FC_tmp = mu_cond/mu_ctrl
+  fold_change <- c(fold_change, FC_tmp)
+}
+```
+```{R}
+#make a new matrix containing the fold change for each gene, <fc_matrix>
+fc_matrix = matrix(data = fold_change, nrow = 5, ncol = 1, byrow = TRUE, dimnames = list(paste('gene', 1:5, sep = ''),c('Fold Change')) )
+```
+
