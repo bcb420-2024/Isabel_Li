@@ -82,7 +82,6 @@ It is important to note that the RNASeq data is gene level data produced from RS
 
 Get the expression data file info:
 ```{r}
-if 
 sfilenames = getGEOSuppFiles(dataset_geoid, fetch_files = FALSE)
 sfilenames$fname
 data_filename <- sfilenames$fname[1]
