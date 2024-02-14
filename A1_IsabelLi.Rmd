@@ -1,0 +1,415 @@
+---
+title: "BCB420 Assignment 1"
+author: "Isabel Li"
+date: "2024-02-13"
+output:
+  html_document:
+    toc: yes
+    toc_depth: '2'
+    df_print: paged
+  pdf_document:
+    toc: yes
+    toc_depth: '2'
+  html_notebook:
+    toc: yes
+    toc_depth: 2
+bibliography: bcb420.bib
+csl: "biomed-central.csl"
+---
+Citation (packages): [@1], [@2], [@3], [@4], [@5]
+
+# Installation of necessary packages:
+```{r message = FALSE, warning=FALSE}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+    BiocManager::install("GEOquery")
+    BiocManager::install("limma")
+
+if(!requireNamespace("kableExtra", quietly = TRUE))
+  install.packages("kableExtra")
+
+if(!requireNamespace('dplyr', quietly = TRUE))
+  install.packages('dplyr')
+
+if(!requireNamespace('edgeR', quietly = TRUE))
+  install.packages('edgeR')
+
+if(!requireNamespace('tidyverse', quietly = TRUE))
+  install.packages('tidyverse')
+
+library(GEOquery)
+library(limma)
+library(biomaRt)
+library(kableExtra)
+library(dplyr)
+library(edgeR)
+library(ggplot2)
+```
+
+# Introduction to dataset
+The dataset[@hu_2023_monocyte] I will be focusing on is on adult-onset Still's disease (AOSD) which is a rare autoinflammatory disease. The most serious symptom resulting from AOSD is macrophage activation syndrome (MAS). To date, there is limited research on AOSD patients with MAS and biomarkers that could be used to detect it. Thus, the study[@jia_2023_neutrophil] aims to contribute to this research area. In this assignment I will be cleaning the dataset containing healthy patient (HC), AOSD patients with MAS (AOSD-MAS) and AOSD patient with no MAS (AOSD).
+
+# 1. Retrieving information from the chosen dataset
+
+The dataset chosen for this assignment is [GSE247993](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE247993)
+```{r message = FALSE, warning=FALSE}
+dataset_geoid <- "GSE247993"
+
+gse <- getGEO(dataset_geoid, GSEMatrix = FALSE) #download and parse information available from NCBI GEO associated with the chosen dataaset
+gse@header$summary
+```
+
+Information about Platform:
+
+```{r}
+current_gpl <- names(GPLList(gse))[1] 
+current_gpl_info <- Meta(getGEO(current_gpl)) #Grab metadata of platform
+```
+
+```{r}
+#Grab attributes of the platform used
+platform_title <- current_gpl_info$title
+submission_date <- current_gpl_info$submission_date
+last_update_date <- current_gpl_info$last_update_date
+organism <- current_gpl_info$organism
+```
+
+**Platform title:** `r platform_title` 
+**Submission date:** `r submission_date` 
+**Last update date:** `r last_update_date` 
+**Organism:** `r organism`
+
+```{r}
+gse@gsms[[1]]@header$data_processing
+```
+It is important to note that the RNASeq data is gene level data produced from RSEM
+
+Get the expression data file info:
+```{r}
+sfilenames = getGEOSuppFiles(dataset_geoid, fetch_files = FALSE)
+sfilenames$fname
+data_filename <- sfilenames$fname[1]
+```
+
+```{r}
+#location to download and store files
+download_dir <- file.path(getwd())
+```
+
+```{r}
+missing_files <- sfilenames$fname[!unlist(lapply(sfilenames$fname, FUN=function(x){
+  file.exists(file.path(download_dir, dataset_geoid,x))}))]
+
+if (length(missing_files >0)){
+  sfiles = getGEOSuppFiles(dataset_geoid, filter_regex = data_filename,
+                           baseDir = download_dir, fetch_files = TRUE)
+  }
+```
+
+```{r}
+counts_data <- read.table(
+  file.path(download_dir, dataset_geoid, data_filename),
+  header=TRUE,
+  check.names=TRUE)
+
+dim(counts_data) #looking at number of genes, number of samples
+kable(counts_data[1:5,1:5], format = 'html')
+
+```
+
+```{r}
+for (i in 1:length(gse@gsms)){
+  x <- gse@gsms[[i]]@header$characteristics_ch1
+  print(x)
+}
+```
+
+# 2. Cleaning the data and mapping to HUGO symbols
+
+## 2.1 Assess data quality for the control and test conditions in dataset
+
+Check if there are no missing values in 'counts_data'
+```{r}
+anyMissing(counts_data)
+```
+
+Lets make sure that there were not any duplicate gene names and gene symbols
+```{r}
+length(unique(rownames(counts_data))) == length(rownames(counts_data))
+length(unique(counts_data[,'gene_id'])) == length(counts_data[,'gene_id'])
+length(unique(counts_data[,'gene_symbol'])) == length(counts_data[,'gene_symbol'])
+```
+
+The above shows that there are no empty values nor duplicate genes
+
+## 2.2 Mapping entrez id to HUGO symbols
+I will be using the 'gene_id' row which represents NCBI Gene ID (Entrez ID) to map to HUGO symbols.
+```{r}
+ensembl <- useMart("ensembl") #connect to desired mart
+datasets <- listDatasets(ensembl)
+kable(head(datasets[grep(datasets$dataset, pattern = 'sapiens'),]), format = 'html')
+ensembl <- useDataset("hsapiens_gene_ensembl", mart=ensembl)
+```
+
+```{r}
+#To find what to parse through filter
+biomart_human_filters <- listFilters(ensembl)
+kable(biomart_human_filters[grep(biomart_human_filters$name, pattern = 'entrez')
+                            ,], format = 'html')
+
+#I will be parsing 'entrezgene_id' for the filter
+```
+
+```{r}
+#to find what is the name to parse through attributes
+kable(searchAttributes(mart = ensembl, 'hgnc|entrez'), format = 'html')
+#Thus, I will be parsing 'hgnc_symbol' and 'entrezgene_id' into attributes
+```
+
+```{r}
+# Mapping the entrez ids to hugo symbols
+entrez_id <- counts_data[,'gene_id']
+id_mapped <- getBM(attributes = c("entrezgene_id", "hgnc_symbol"), 
+                   filters = c("entrezgene_id"),
+                   values = entrez_id,
+                   mart = ensembl)
+```
+
+## 2.3 Quality check the mapping
+Number of genes we were able to map:
+```{r}
+length(which(counts_data[, 'gene_id'] %in% id_mapped$entrezgene_id))
+```
+
+Total entrez id genes we started with:
+```{r}
+nrow(counts_data)
+```
+
+Not mapped:
+```{r}
+nrow(counts_data) - length(which(counts_data[, 'gene_id'] %in% id_mapped$entrezgene_id))
+```
+
+Check if mapping between entrez_id and hgnc_symbol is one-to-one:
+```{r}
+id_mapped[duplicated(id_mapped[,'entrezgene_id']),]
+id_mapped[duplicated(id_mapped[,'hgnc_symbol'])!='',]
+dup_entrez = nrow(id_mapped[duplicated(id_mapped[,'entrezgene_id']),]) #number of duplicated entrezid
+dup_hugo = nrow(id_mapped[duplicated(id_mapped[,'hgnc_symbol']),]) #number of duplicated hugo symbols
+```
+## Combine the mapped ids into counts_data
+```{r}
+# add columns to counts_data with entrez_id and hgnc identifier
+counts_data[,'entrez_id'] = NA
+counts_data[, 'hgnc_symbol'] = NA
+counts_data = data.frame(counts_data)
+counts_data = counts_data %>% relocate('entrez_id', 'hgnc_symbol') # move the entrez_id and hgnc_symbol to the front
+```
+
+```{r}
+# fill in the counts_data with the mapped ids
+for (i in 1:nrow(counts_data)){
+  indx = which(id_mapped[,'entrezgene_id'] == counts_data[i,'gene_id'],
+                  arr.ind = TRUE)
+  if (length(indx) >0){
+    #if the entrezgene_id was mapped to a hgnc symbol, add it to counts_data
+    counts_data[i, 'entrez_id'] = id_mapped[indx[1], 'entrezgene_id']
+    counts_data[i, 'hgnc_symbol'] = id_mapped[indx[1], 'hgnc_symbol']
+  }
+}
+```
+
+```{r}
+missing <- kable(counts_data[
+  which(is.na(counts_data$hgnc_symbol))[1:5],1:5], type="html")
+missing
+```
+Upon manually searching the values from 'gene_id' in the 'missing' table, which is a table of unmapped entrez_id, I found that there were no HUGO symbols associated with them.
+
+# Distribution of dataset
+
+## Boxplot of RNA-seq data before normalization
+
+First, we can make a function to generate a boxplot of the data
+```{r}
+# create function to generate boxplot of RNASeq data
+boxplot_rnaseq <- function(count_data, title){
+  log2_data <- log2(count_data)
+  
+  boxplot(log2_data,xlab = "Samples", ylab = "log2 TPM", las = 2, cex = 0.5, 
+        cex.lab = 0.5, cex.axis = 0.5, main = title)
+  
+  abline(h = median(apply(log2_data, 2, median)), 
+       col = "green", lwd = 0.6, lty = "dashed")
+}
+```
+
+Below is a boxplot of RNASeq data before normalization
+```{r, fig.cap="Boxplot of raw data before normalization" ,warning = FALSE}
+boxplot_rnaseq(counts_data[,6:27], 'Raw data before normalization')
+```
+
+## Density plot of RNASeq data before normalization
+First, we can make a function to generate density plots
+```{r}
+# function to make density plot
+density_plot <- function(count_data, title){
+  counts_density <- apply(log2(count_data),2, density)
+  xlim <- 0; ylim <- 0
+  for (i in 1:length(counts_density)){
+    xlim <- range(c(xlim, counts_density[[i]]$x));
+    ylim <- range(c(ylim, counts_density[[i]]$y))}
+
+  cols <- rainbow(length(counts_density))
+  ltys <- rep(1, length(counts_density))
+  
+  #plot the first density plot to initialize plot
+  plot(counts_density[[1]], xlim=xlim, ylim=ylim, type="n", 
+       ylab="Smoothing density of log2-CPM", main="", cex.lab = 0.85)
+  
+  #plot each line
+  for (i in 1:length(counts_density)){
+    lines(counts_density[[i]], col=cols[i], lty=ltys[i])
+  }
+  title(title)
+
+}
+```
+
+Below is a plot of raw count_data before normalization
+```{r, fig.cap = "Density plot of raw data"}
+density_plot(counts_data[,6:27], 'Raw Count Data Distribution')
+```
+
+# Normalization
+
+## Removing outliers - Filter out low counts
+Lowly expressed genes are often background noise rather than a meaningful biological signal. edgeR recommends that the genes are filtered out if they can't be expressed in all of the samples for any of the conditions.
+
+```{r}
+min_samp <- 11 # number of samples in healthy control is 10 and number of samples in AOSD is 12. So I'm going to choose a number in between as the minimum number of samples
+
+count_mat <- as.matrix(counts_data[,6:27])
+#get rid of low counts
+keep = rowSums(cpm(count_mat) >1) > min_samp # keep genes that have at least 1 
+# count per million and that they are found in at least 11 samples
+
+filtered_count_mat = count_mat[keep,] #filter the dataset to values that meet the 'keep' condition
+```
+
+Now let's see how filtering changed the data
+```{r warning = FALSE, fig.cap = "Boxplot comparison of raw data and filtered raw data", fig.show = "hold", out.width="50%"}
+boxplot_rnaseq(counts_data[,6:27], 'Raw Count data')
+boxplot_rnaseq(filtered_count_mat, 'Filtered Raw Count data')
+
+```
+
+```{r, fig.cap = "Density plots of raw data and filtered raw data", fig.show = "hold", out.width="50%"}
+
+density_plot(counts_data[,6:27], 'Raw Count data')
+density_plot(filtered_count_mat, 'Filtered Raw Count data')
+```
+
+## Applying TMM to the dataset
+
+```{r}
+#Create an edgeR container for RNASeq count data
+conditions = c(rep("Healthy Control",10),rep("AOSD-MAS",9), rep("AOSD",3))
+TMM = DGEList(counts = filtered_count_mat, group=conditions) # set group to conditions so DGE can calculate means across groups
+d = calcNormFactors(TMM) #calculate normalization factors
+TMM_norm_counts <- cpm(TMM)
+```
+
+## Comparing normalized data to original data
+Let's see how the boxplot of rnaseq data changes
+```{r, warning = FALSE, fig.cap = "Boxplot comparisons of rna seq before and after normalization", fig.show = "hold", out.width="50%"}
+boxplot_rnaseq(counts_data[,6:27], 'Raw Count data')
+boxplot_rnaseq(TMM_norm_counts, 'Normalized Count data')
+```
+Let's see how the density changes
+```{r, fig.cap = "Density plot comparison of raw data and normalized data", fig.show = "hold", out.width="50%"}
+density_plot(counts_data[,6:27], 'Raw Count data')
+density_plot(TMM_norm_counts, 'Normalized Count data')
+```
+
+Next, we can see the changes using a multidimensional scaling plot
+```{r, fig.cap = "MSD plot"}
+limma::plotMDS(d, labels=NULL, pch = 1,
+               col = c("darkgreen","red","blue")[factor(conditions)])
+legend("topright",
+       legend=levels(factor(conditions)),
+       pch=c(1), col = c("darkgreen","red","blue"),title = "Class", bty = 'n', cex = 0.75)
+```
+From the dataset, we can see that there is some separation between the samples from different conditions which is good.
+
+Next, we can take a look at the dispersion among samples
+```{r fig.cap = "BCV plot"}
+disp <- model.matrix(~conditions)
+est_d <- estimateDisp(d, disp)
+plotBCV(est_d, col.tagwise = "black", col.common = "red")
+```
+The BCV plot shows that across the genes, the dispersion remains around the same value. This tells us that there is relatively low technical variation in the samples.
+
+Lastly, lets see the Mean-variance analysis
+```{r, fig.cap = "Mean-variance analysis"}
+plotMeanVar(est_d, show.raw.vars = TRUE, show.tagwise.vars=TRUE,
+            NBline = TRUE, show.ave.raw.vars = TRUE, 
+            show.binned.common.disp.vars = FALSE)
+```
+The plot above shows that the data does follow a negative binomial distribution (blue line)
+
+# Write out the normalized filtered data
+```{r}
+write.table(TMM_norm_counts, file.path(getwd(), dataset_geoid, paste(dataset_geoid, "TMM_normalized_filtered_RSEM_counts.txt",sep="_")),
+            quote = FALSE, sep = "\t", row.names = TRUE)
+
+``` 
+
+# Interpretation
+
+## Q1. What are the control and test conditions of the dataset?
+
+```
+The control for this dataset were 10 healthy patients that the paper terms 'HC' and the test conditions for this dataset were 12 AOSD patients (9 with AOSD-MAS and 3 without AOSD).
+```
+
+## Q2. Why is the dataset of interest to you?
+
+```
+This dataset was interesting to me because im interested in arthritis research, thus, I found out that the disease AOSD is characterized by multiple symptoms, one of which is arthritis.
+
+More can be read in my journal entry on [github](https://github.com/bcb420-2024/Isabel_Li/wiki/3.-Choosing-a-dataset-(Assignment-1))
+```
+
+## Q3. Were there expression values that were not unique for specific genes? How did you handle these?
+
+```
+Yes, there were expression values that were not unique. Those expression values were left in the dataset.
+```
+
+## Q4. Were there expression values that could not be mapped to current HUGO symbols?
+
+```
+Yes, there were expression values that could not be mapped to HUGO symbols. After manually checking, I found that indeed, there was no HUGO symbol associated with those genes.
+```
+
+## Q5. How many outliers were removed?
+
+```
+There were no outliers that were removed by myself. However, I suspect that there were outliers that were removed from the supplemented file that I used. 
+```
+
+## Q6. How did you handle replicates?
+
+```
+I treated replicates as a either one of the conditions which is either the healthy control, AOSD-MAS or AOSD.
+```
+
+## Q7. What is the final coverage of your dataset?
+
+```
+The final coverage of the dataset is `r nrow(TMM_norm_counts)`
+```
+
+# References
