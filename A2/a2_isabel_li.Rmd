@@ -307,7 +307,7 @@ heatmap_visual_ctrl_vs_AOSD
 For both the heatmaps generated, the samples from the same 'disease_state' do cluster together showing that there is differential expression between disease states. This provides evidence that the same sets of genes are either being upregulated or downregulated across samples from the same group.
 
 # Part 2. Thresholded over-representation analysis
-Now that we have sets of genes that are significantly up-regulated and down-regulated, we will run a thresholded gene set enrichment analysis.
+Now that we have sets of genes that are significantly up-regulated and down-regulated, we will run a over-representation analysis to see which pathways or terms are enriched.
 
 Store gene id's of those that are upregulated, downregulated and the full gene list which have FDR<0.05
 ```{r, message = FALSE, warning = FALSE}
@@ -361,8 +361,11 @@ get_version_info(organism='hsapiens')$sources$'KEGG'$version
 ```
 Version of annotation sources:
 - GO:BP = 2024-01-17
+
 - REAC = 2024-01-25
+
 - WP = 2024-01-01
+
 - KEGG = 2024-01-22
 
 Filter the results by term sizes that are between 5 and 200
@@ -464,7 +467,9 @@ For the comparison between healthy controls and AOSD, most of the terms from the
 ## Q1. Do the over-representation results support conclusions or mechanism discussed in the original paper?
 In the paper, the authors compared AOSD-MAS patients to control and they found that there was pathway enrichment in genes involved in defense response to viruses and cytokine-mediated signaling pathways (see Figure 5). Therefore, the over-representation results do agree because there were many term related to the immune response that was enriched in the above analysis for the upregulated genes. Similar results were found for the AOSD samples by the authors which agree with our results. However, the authors did not report genes that were downregulated, therefore a comparison cannot be made. All together, both the results in this assignment and the paper support the conclusion that monocytes in AOSD are activated to differentiate pro-inflammatory macrophage and produce high levels of pro-inflammatory cytokines.
 
-![Figure 5. GO analysis done by Jie et al 2023 of Differentially expressed genes of AOSD-MAS versus HCs. ](A2_fig/Fig4b_paper.png)
+![](A2_fig/Fig4b_paper.png)
+
+Figure 5. GO analysis done by Jie et al 2023 of Differentially expressed genes of AOSD-MAS versus HCs.[@jia_2023_neutrophil]
 
 ## Q2. Can you find evidence, i.e. publications, to support some of the results that you see. How does this evidence support your results
 
